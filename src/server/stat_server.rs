@@ -403,7 +403,7 @@ impl StatServer {
 			let _ = writeln!(res, ",\n    \"players_id\": {{");
 			let entries: Vec<_> = players_map.iter().collect();
 			for (index, (com_id, users)) in entries.iter().enumerate() {
-				let _ = writeln!(res, "        \"{}\": {{", com_id_str);
+				let _ = writeln!(res, "        \"{}\": {{", com_id);
 				for (i, (ip, name)) in users.iter().enumerate() {
 					let comma = if i != users.len() - 1 { "," } else { "" };
 					let _ = write!(res, "            \"{}\": \"{}\"{}", ip, sanitize_for_json(name), comma);
