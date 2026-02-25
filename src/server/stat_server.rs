@@ -395,12 +395,15 @@ impl StatServer {
 		add_games_with_hints(&mut res, "psn_games", &psn_games);
 		add_games(&mut res, "ticket_games", &ticket_games);
 
-		let players_map = room_manager.read().get_players_by_com_id();
+		let players_map = {
+			let rm = room_manager.read();
+			rm.get_players_by_com_id()
+		};
 		if !players_map.is_empty() {
 			let _ = writeln!(res, ",\n    \"players_id\": {{");
 			let entries: Vec<_> = players_map.iter().collect();
 			for (index, (com_id, users)) in entries.iter().enumerate() {
-				let _ = writeln!(res, "        \"{}\": {{", com_id_to_string(com_id));
+				let _ = writeln!(res, "        \"{}\": {{", com_id_str);
 				for (i, (ip, name)) in users.iter().enumerate() {
 					let comma = if i != users.len() - 1 { "," } else { "" };
 					let _ = write!(res, "            \"{}\": \"{}\"{}", ip, sanitize_for_json(name), comma);
