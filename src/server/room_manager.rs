@@ -1745,14 +1745,14 @@ impl RoomManager {
 		Some(self.user_rooms.get(&user).unwrap().clone())
 	}
 
-	pub fn get_players_by_com_id(&self) -> HashMap<String, Vec<(String, String)>> {
-		let mut result: HashMap<String, Vec<(String, String)>> = HashMap::new();
+	pub fn get_players_by_com_id(&self) -> HashMap<ComId, Vec<(String, String)>> {
+		let mut result: HashMap<ComId, Vec<(String, String)>> = HashMap::new();
 		for ((com_id, _), room) in &self.rooms {
-			let entry = result.entry(com_id_to_string(com_id)).or_default();
+			let entry = result.entry(*com_id).or_default();
 			for user in room.users.values() {
 				let ip = user.signaling_info.addr_p2p_ipv4.0;
 				let ip_str = format!("{}.{}.{}.{}", ip[0], ip[1], ip[2], ip[3]);
-				entry.push((ip_str, user.online_name.clone()));
+				entry.push((user.online_name.clone(), ip_str));
 			}
 		}
 		result

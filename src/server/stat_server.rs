@@ -172,11 +172,11 @@ impl StatServer {
 						let cache_life = self.cache_life;
 						let game_tracker = self.game_tracker.clone();
 						let score_cache = self.score_cache.clone();
-						let room_manager = self.room_manager.clone();
 						let json_cache = self.json_cache.clone();
+						let room_manager = self.room_manager.clone();
 
 						tokio::task::spawn(async move {
-							if let Err(err) = http1::Builder::new().keep_alive(false).serve_connection(io, service_fn(|r| StatServer::handle_stat_server_req(r, &path, cache_life, game_tracker.clone(), score_cache.clone(), room_manager.clone(), json_cache.clone()))).await {
+							if let Err(err) = http1::Builder::new().keep_alive(false).serve_connection(io, service_fn(|r| StatServer::handle_stat_server_req(r, &path, cache_life, game_tracker.clone(), score_cache.clone(), json_cache.clone(), room_manager.clone()))).await {
 								warn!("Stat: Error serving connection: {}", err);
 							}
 						});
@@ -190,7 +190,7 @@ impl StatServer {
 		info!("GameTracker::server_proc terminating");
 	}
 
-	fn handle_usage_req(cache_life: u32, game_tracker: &Arc<GameTracker>, room_manager: &Arc<RwLock<RoomManager>>, json_cache: &Arc<JsonCache>) -> Result<Response<String>, Infallible> {
+	fn handle_usage_req(cache_life: u32, game_tracker: &Arc<GameTracker>, json_cache: &Arc<JsonCache>, room_manager: &Arc<RwLock<RoomManager>>) -> Result<Response<String>, Infallible> {
 		if cache_life == 0 {
 			return Ok(Response::builder()
 				.header("Content-Type", "application/json")
@@ -298,8 +298,8 @@ impl StatServer {
 		cache_life: u32,
 		game_tracker: Arc<GameTracker>,
 		score_cache: Arc<ScoresCache>,
-		room_manager: Arc<RwLock<RoomManager>>,
 		json_cache: Arc<JsonCache>,
+		room_manager: Arc<RwLock<RoomManager>>,
 	) -> Result<Response<String>, Infallible> {
 		if req.method() != Method::GET {
 			return Ok(Response::new("".to_owned()));
@@ -310,7 +310,7 @@ impl StatServer {
 		let score_prefix = format!("{}/score/", path);
 
 		if req_path == usage_path {
-			return StatServer::handle_usage_req(cache_life, &game_tracker, &room_manager, &json_cache);
+			return StatServer::handle_usage_req(cache_life, &game_tracker, &json_cache, &room_manager);
 		}
 
 		if let Some(rest) = req_path.strip_prefix(&score_prefix) {
@@ -395,18 +395,16 @@ impl StatServer {
 		add_games_with_hints(&mut res, "psn_games", &psn_games);
 		add_games(&mut res, "ticket_games", &ticket_games);
 
-		let players_map = {
-			let rm = room_manager.read();
-			rm.get_players_by_com_id()
-		};
+		let players_map = room_manager.read().get_players_by_com_id();
 		if !players_map.is_empty() {
 			let _ = writeln!(res, ",\n    \"players_id\": {{");
 			let entries: Vec<_> = players_map.iter().collect();
 			for (index, (com_id, users)) in entries.iter().enumerate() {
-				let _ = writeln!(res, "        \"{}\": {{", com_id);
-				for (i, (ip, name)) in users.iter().enumerate() {
+				let com_id_str = com_id_to_string(com_id);
+				let _ = writeln!(res, "        \"{}\": {{", com_id_str);
+				for (i, (name, ip)) in users.iter().enumerate() {
 					let comma = if i != users.len() - 1 { "," } else { "" };
-					let _ = write!(res, "            \"{}\": \"{}\"{}", ip, sanitize_for_json(name), comma);
+					let _ = write!(res, "            \"{}\": \"{}\"{}", sanitize_for_json(name), ip, comma);
 					res += "\n";
 				}
 				res += if index != entries.len() - 1 { "        },\n" } else { "        }\n" };
@@ -415,6 +413,7 @@ impl StatServer {
 		}
 
 		res += "\n}";
+
 		res
 	}
 
