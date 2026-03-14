@@ -6,20 +6,21 @@ use std::net::ToSocketAddrs;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use hyper::server::conn::http1;
-use hyper::service::service_fn;
-use hyper::{Method, Request, Response};
-use hyper_util::rt::TokioIo;
-use parking_lot::Mutex;
-use tokio::net::TcpListener;
-use tracing::{info, warn};
-
 use crate::Client;
 use crate::server::GameTracker;
 use crate::server::Server;
 use crate::server::client::{COMMUNICATION_ID_SIZE, ComId, TerminateWatch, com_id_to_string};
 use crate::server::database::db_score::DbBoardInfo;
+use crate::server::room_manager::RoomManager;
 use crate::server::score_cache::{GetScoreResultCache, ScoresCache};
+use hyper::server::conn::http1;
+use hyper::service::service_fn;
+use hyper::{Method, Request, Response};
+use hyper_util::rt::TokioIo;
+use parking_lot::Mutex;
+use parking_lot::RwLock;
+use tokio::net::TcpListener;
+use tracing::{info, warn};
 
 struct CachedResponse {
 	timestamp: AtomicU32,
@@ -71,6 +72,7 @@ pub struct StatServer {
 	game_tracker: Arc<GameTracker>,
 	score_cache: Arc<ScoresCache>,
 	json_cache: Arc<JsonCache>,
+	room_manager: Arc<RwLock<RoomManager>>,
 }
 
 fn sanitize_for_json(s: &str) -> String {
@@ -87,7 +89,7 @@ fn sanitize_for_json(s: &str) -> String {
 }
 
 impl Server {
-	pub async fn start_stat_server(&self, term_watch: TerminateWatch, game_tracker: Arc<GameTracker>) -> io::Result<()> {
+	pub async fn start_stat_server(&self, term_watch: TerminateWatch, game_tracker: Arc<GameTracker>, room_manager: Arc<RwLock<RoomManager>>) -> io::Result<()> {
 		let (bind_addr, cache_life, path);
 		{
 			let config = self.config.read();
@@ -113,7 +115,7 @@ impl Server {
 
 			info!("Stat server now waiting for connections on {}", str_addr);
 
-			let mut stat_server = StatServer::new(listener, term_watch, path, cache_life, game_tracker, score_cache);
+			let mut stat_server = StatServer::new(listener, term_watch, path, cache_life, game_tracker, score_cache, room_manager);
 
 			tokio::task::spawn(async move {
 				stat_server.server_proc().await;
@@ -125,7 +127,15 @@ impl Server {
 }
 
 impl StatServer {
-	fn new(listener: TcpListener, term_watch: TerminateWatch, path: String, cache_life: u32, game_tracker: Arc<GameTracker>, score_cache: Arc<ScoresCache>) -> StatServer {
+	fn new(
+		listener: TcpListener,
+		term_watch: TerminateWatch,
+		path: String,
+		cache_life: u32,
+		game_tracker: Arc<GameTracker>,
+		score_cache: Arc<ScoresCache>,
+		room_manager: Arc<RwLock<RoomManager>>,
+	) -> StatServer {
 		StatServer {
 			listener,
 			term_watch,
@@ -134,6 +144,7 @@ impl StatServer {
 			game_tracker,
 			score_cache,
 			json_cache: Arc::new(JsonCache::new()),
+			room_manager,
 		}
 	}
 
@@ -160,9 +171,10 @@ impl StatServer {
 						let game_tracker = self.game_tracker.clone();
 						let score_cache = self.score_cache.clone();
 						let json_cache = self.json_cache.clone();
+						let room_manager = self.room_manager.clone();
 
 						tokio::task::spawn(async move {
-							if let Err(err) = http1::Builder::new().keep_alive(false).serve_connection(io, service_fn(|r| StatServer::handle_stat_server_req(r, &path, cache_life, game_tracker.clone(), score_cache.clone(), json_cache.clone()))).await {
+							if let Err(err) = http1::Builder::new().keep_alive(false).serve_connection(io, service_fn(|r| StatServer::handle_stat_server_req(r, &path, cache_life, game_tracker.clone(), score_cache.clone(), json_cache.clone(), room_manager.clone()))).await {
 								warn!("Stat: Error serving connection: {}", err);
 							}
 						});
@@ -285,6 +297,7 @@ impl StatServer {
 		game_tracker: Arc<GameTracker>,
 		score_cache: Arc<ScoresCache>,
 		json_cache: Arc<JsonCache>,
+		room_manager: Arc<RwLock<RoomManager>>,
 	) -> Result<Response<String>, Infallible> {
 		if req.method() != Method::GET {
 			return Ok(Response::new("".to_owned()));
@@ -293,9 +306,18 @@ impl StatServer {
 		let req_path = req.uri().path();
 		let usage_path = format!("{}/usage", path);
 		let score_prefix = format!("{}/score/", path);
+		let rooms_prefix = format!("{}/rooms/", path);
 
 		if req_path == usage_path {
 			return StatServer::handle_usage_req(cache_life, &game_tracker, &json_cache);
+		}
+
+		if let Some(com_id_str) = req_path.strip_prefix(&rooms_prefix) {
+			if com_id_str.len() == COMMUNICATION_ID_SIZE {
+				let mut com_id: ComId = [0u8; COMMUNICATION_ID_SIZE];
+				com_id.copy_from_slice(com_id_str.as_bytes());
+				return StatServer::handle_rooms_req(&room_manager, &com_id);
+			}
 		}
 
 		if let Some(rest) = req_path.strip_prefix(&score_prefix) {
@@ -446,6 +468,56 @@ impl StatServer {
 		}
 
 		res += "    ]\n}";
+		res
+	}
+
+	fn handle_rooms_req(room_manager: &Arc<RwLock<RoomManager>>, com_id: &ComId) -> Result<Response<String>, Infallible> {
+		let json = StatServer::rooms_to_json(room_manager, com_id);
+		Ok(Response::builder().header("Content-Type", "application/json").body(json).unwrap())
+	}
+
+	fn rooms_to_json(room_manager: &Arc<RwLock<RoomManager>>, com_id: &ComId) -> String {
+		let rm = room_manager.read();
+		let mut res = String::from("[\n");
+		let mut first_room = true;
+
+		for ((c_id, room_id), room) in rm.get_rooms() {
+			if c_id != com_id {
+				continue;
+			}
+
+			if !first_room {
+				res += ",\n";
+			}
+			first_room = false;
+
+			let _ = writeln!(res, "  {{");
+			let _ = writeln!(res, "    \"room_id\": {},", room_id);
+			let _ = writeln!(res, "    \"world_id\": {},", room.world_id);
+			let _ = writeln!(res, "    \"lobby_id\": {},", room.lobby_id);
+			let _ = writeln!(res, "    \"max_slot\": {},", room.max_slot);
+			let _ = writeln!(res, "    \"cur_member_num\": {},", room.users.len());
+			let _ = writeln!(res, "    \"flag_attr\": {},", room.flag_attr);
+			let _ = writeln!(res, "    \"has_password\": {},", room.room_password.is_some());
+			res += "    \"members\": [\n";
+
+			for (i, user) in room.users.values().enumerate() {
+				let comma = if i != room.users.len() - 1 { "," } else { "" };
+				let _ = writeln!(
+					res,
+					"      {{ \"npid\": \"{}\", \"online_name\": \"{}\", \"is_owner\": {} }}{}",
+					sanitize_for_json(&user.npid),
+					sanitize_for_json(&user.online_name),
+					user.flag_attr & 0x80000000 != 0,
+					comma
+				);
+			}
+
+			res += "    ]\n";
+			res += "  }";
+		}
+
+		res += "\n]";
 		res
 	}
 }

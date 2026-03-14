@@ -23,11 +23,11 @@ pub struct DbScoreInfo {
 impl Default for DbBoardInfo {
 	fn default() -> DbBoardInfo {
 		DbBoardInfo {
-			rank_limit: 100,
+			rank_limit: 500,
 			update_mode: 0, // SCE_NP_SCORE_NORMAL_UPDATE
 			sort_mode: 0,   // SCE_NP_SCORE_DESCENDING_ORDER
-			upload_num_limit: 10,
-			upload_size_limit: 6_000_000, // 6MB
+			upload_num_limit: 60,
+			upload_size_limit: 50_000_000, // 6MB
 		}
 	}
 }

@@ -274,11 +274,11 @@ impl SignalParam {
 
 struct RoomUser {
 	user_id: i64,
-	npid: String,
-	online_name: String,
+	pub(crate) npid: String,
+	pub(crate) online_name: String,
 	avatar_url: String,
 	join_date: u64,
-	flag_attr: u32,
+	pub(crate) flag_attr: u32,
 
 	group_id: u8,
 	member_attr: RoomMemberBinAttr,
@@ -421,15 +421,15 @@ impl RoomUser {
 
 pub struct Room {
 	// Info given from stream
-	world_id: u32,
-	lobby_id: u64,
-	max_slot: u16,
-	flag_attr: u32,
+	pub(crate) world_id: u32,
+	pub(crate) lobby_id: u64,
+	pub(crate) max_slot: u16,
+	pub(crate) flag_attr: u32,
 	bin_attr_internal: [RoomBinAttrInternal; 2],
 	bin_attr_external: [RoomBinAttr<256>; 2],
 	search_bin_attr: RoomBinAttr<64>,
 	search_int_attr: [RoomIntAttr; 8],
-	room_password: Option<[u8; 8]>,
+	pub(crate) room_password: Option<[u8; 8]>,
 	group_config: Vec<RoomGroupConfig>,
 	password_slot_mask: u64,
 	allowed_users: Vec<String>,
@@ -441,7 +441,7 @@ pub struct Room {
 	room_id: u64,
 	slots: Vec<bool>,
 	member_id_counter: u16,
-	users: BTreeMap<u16, RoomUser>,
+	pub(crate) users: BTreeMap<u16, RoomUser>,
 	owner: u16,
 
 	// Set by SetInternal
@@ -752,7 +752,7 @@ impl Room {
 		}
 
 		let max_public_slots = self.max_slot - max_private_slots;
-		
+
 		let mut room_users = Vec::new();
 		for user in self.users.values() {
 			room_users.push(user.to_roomMemberDataExternal());
@@ -776,7 +776,7 @@ impl Room {
 			room_searchable_int_attr_external: vec_searchint,
 			room_searchable_bin_attr_external: vec_searchbin,
 			room_bin_attr_external: vec_binattrexternal,
-			users: room_users
+			users: room_users,
 		}
 	}
 
@@ -2013,5 +2013,9 @@ impl RoomManager {
 			}
 		}
 		result
+	}
+
+	pub fn get_rooms(&self) -> &HashMap<(ComId, u64), Room> {
+		&self.rooms
 	}
 }
