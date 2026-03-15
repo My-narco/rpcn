@@ -227,7 +227,7 @@ impl Client {
 
 		if self.config.read().is_email_validated() {
 			let tokens: Vec<&str> = check_email.split('@').collect();
-			if self.config.read().is_banned_domain(tokens[1]) {
+			if !self.config.read().is_banned_domain(tokens[1]) {
 				warn!("Attempted to use banned domain: {}", email);
 				return Err(ErrorType::CreationBannedEmailProvider);
 			}
